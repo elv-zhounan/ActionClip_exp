@@ -94,7 +94,7 @@ class Transformer(nn.Module):
 
 
 class VisualTransformer(nn.Module):
-    def __init__(self, input_resolution: int, patch_size: int, width: int, layers: int, heads: int, output_dim: int,dropout = None,joint=False, emb_dropout = 0., T=0):
+    def __init__(self, input_resolution: int, patch_size: int, width: int, layers: int, heads: int, output_dim: int,dropout = None, joint=False, emb_dropout = 0., T=0):
         super().__init__()
         self.input_resolution = input_resolution
         self.output_dim = output_dim
@@ -110,7 +110,6 @@ class VisualTransformer(nn.Module):
         if joint:
             print('=====using joint space-time====')
             self.time_embedding = nn.Parameter(scale * torch.randn(T, width))
-            # FIXME
             self.T = T
         if emb_dropout > 0:
             print('emb_dropout:{}'.format(emb_dropout))
@@ -125,12 +124,13 @@ class VisualTransformer(nn.Module):
         x = self.conv1(x)  # shape = [*, width(the out channels), grid, grid]
         x = x.reshape(x.shape[0], x.shape[1], -1)  # shape = [*, width, grid ** 2]
         x = x.permute(0, 2, 1)  # shape = [*, grid ** 2, width]
+        # using a small trick to make [width, ] shape class embedding to be like [batch, 1, width]
         x = torch.cat([self.class_embedding.to(x.dtype) + torch.zeros(x.shape[0], 1, x.shape[-1], dtype=x.dtype, device=x.device), x], dim=1)  # shape = [*, grid ** 2 + 1, width]
         x = x + self.positional_embedding.to(x.dtype)
         # [*, L, c]
         if self.joint:
-            # wants to add time_embedding, and also rearrange the dimensions:
-                # from [B*T, L, c] to [B, L*T, c]
+            #  I don't think the "fusion before" stagety will work
+            # wants to add time_embedding, and also rearrange the dimensions: from [B*T, L, c] to [B, L*T, c]
             B = x.shape[0] // self.T
             cls_tokens = x[:B, 0, :].unsqueeze(1)
             x = x[:,1:]
@@ -143,10 +143,10 @@ class VisualTransformer(nn.Module):
             x = self.dropout(x)
         x = self.ln_pre(x)
 
-        x = x.permute(1, 0, 2)  # NLD -> LND
+        x = x.permute(1, 0, 2)  # NLD -> LND, required by torch.nn.Multihead attention
         x = self.transformer(x)
         x = x.permute(1, 0, 2)  # LND -> NLD
-
+        # only return the cls label
         x = self.ln_post(x[:, 0, :])
 
         if self.proj is not None:
@@ -209,30 +209,13 @@ class CLIP(nn.Module):
         self.text_projection = nn.Parameter(torch.empty(transformer_width, embed_dim))
         self.logit_scale = nn.Parameter(torch.ones([]) * np.log(1 / 0.07))
 
-        self.initialize_parameters()
-
-    def initialize_parameters(self):
-        nn.init.normal_(self.token_embedding.weight, std=0.02)
-        nn.init.normal_(self.positional_embedding, std=0.01)
-
-        proj_std = (self.transformer.width ** -0.5) * ((2 * self.transformer.layers) ** -0.5)
-        attn_std = self.transformer.width ** -0.5
-        fc_std = (2 * self.transformer.width) ** -0.5
-        for block in self.transformer.resblocks:
-            nn.init.normal_(block.attn.in_proj_weight, std=attn_std)
-            nn.init.normal_(block.attn.out_proj.weight, std=proj_std)
-            nn.init.normal_(block.mlp.c_fc.weight, std=fc_std)
-            nn.init.normal_(block.mlp.c_proj.weight, std=proj_std)
-
-        if self.text_projection is not None:
-            nn.init.normal_(self.text_projection, std=self.transformer.width ** -0.5)
-
+        
     def build_attention_mask(self):
         # lazily create causal attention mask, with full attention between the vision tokens
         # pytorch uses additive attention mask; fill with -inf
         mask = torch.empty(self.context_length, self.context_length)
         mask.fill_(float("-inf"))
-        mask.triu_(1)  # zero out the lower diagonal
+        mask.triu_(1)  # zero out the lower diagonal, which is the part we are going to pay attention to
         return mask
 
     @property
@@ -243,8 +226,9 @@ class CLIP(nn.Module):
         return self.visual(image.type(self.dtype))
 
     def encode_text(self, text):
+        print(text.shape)
         x = self.token_embedding(text).type(self.dtype)  # [batch_size, n_ctx, d_model]
-
+        print(x.shape)
         x = x + self.positional_embedding.type(self.dtype)
         if self.emb_dropout > 0:
             x = self.dropout(x)
