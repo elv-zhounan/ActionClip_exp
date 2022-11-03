@@ -1,4 +1,3 @@
-from ctypes.wintypes import RGB
 import cv2
 from typing import Union, List
 import numpy as np
@@ -24,6 +23,22 @@ def tranform(frames: List[np.ndarray], input_sz):
         res.append(auger(frame))
     return torch.stack(res)[None]
 
+def text_prompt(classes_names, context_length=77):
+    tokenizer = SimpleTokenizer()
+    text_aug = [f"a photo of action {{}}", f"a picture of action {{}}", f"Human action of {{}}", f"{{}}, an action",
+                f"{{}} this is an action", f"{{}}, a video of action", f"Playing action of {{}}", f"{{}}",
+                f"Playing a kind of action, {{}}", f"Doing a kind of action, {{}}", f"Look, the human is {{}}",
+                f"Can you recognize the action of {{}}?", f"Video classification of {{}}", f"A video of {{}}",
+                f"The man is {{}}", f"The woman is {{}}"]
+    text_dict = {}
+    num_text_aug = len(text_aug)
+
+    for i, txt in enumerate(text_aug):
+        text_dict[i] = torch.cat([tokenize(tokenizer, txt.format(c), context_length) for c in classes_names])
+
+    classes = torch.cat([v for k, v in text_dict.items()])
+
+    return classes, num_text_aug, text_dict
 
 def tokenize(_tokenizer: SimpleTokenizer, texts: Union[str, List[str]], context_length: int = 77) -> torch.LongTensor:
     """

@@ -1,7 +1,8 @@
+import os
 from torch import nn
 import torch
 import cv2
-import os
+import numpy as np
 from loguru import logger
 import random
 
@@ -30,6 +31,15 @@ def convert_weights(model: nn.Module):
 
 def norm(t, eps=1e-8):
     return t / (torch.linalg.norm(t, dim=1, keepdim=True) + eps)
+
+def gen_label(labels):
+    num = len(labels)
+    gt = np.zeros(shape=(num,num))
+    for i, label in enumerate(labels):
+        for k in range(num):
+            if labels[k] == label:
+                gt[i,k] = 1
+    return gt
 
 def get_video_frames(video_path, freq):
     if not os.path.exists(video_path):
