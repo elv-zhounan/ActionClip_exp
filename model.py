@@ -10,6 +10,7 @@ import torch
 import torch.nn.functional as F
 from torch import nn
 from einops import rearrange
+from utils import norm
 
 def drop_path(x, drop_prob: float = 0., training: bool = False):
     """Drop paths (Stochastic Depth) per sample (when applied in main path of residual blocks).
@@ -68,12 +69,17 @@ class ResidualAttentionBlock(nn.Module):
         self.ln_2 = LayerNorm(d_model)
         self.attn_mask = attn_mask
 
-    def attention(self, x: torch.Tensor):
-        self.attn_mask = self.attn_mask.to(dtype=x.dtype, device=x.device) if self.attn_mask is not None else None
-        return self.attn(x, x, x, need_weights=False, attn_mask=self.attn_mask)[0]
+    def attention(self, x: torch.Tensor, padding_mask: torch.Tensor = None):
+        # self.attn_mask = self.attn_mask.to(dtype=x.dtype, device=x.device) if self.attn_mask is not None else None
+        # return self.attn(x, x, x, need_weights=False, attn_mask=self.attn_mask)[0]
+        # TODO:
+        # Don't know why the author is using attn mask and not using padding mask
+        # it is not a generative model, so I think dropping attn_mask (mask upper triangle) and adding padding mask is more reasonable
+        padding_mask = padding_mask.to(dtype=x.dtype, device=x.device) if padding_mask is not None else None
+        return self.attn(x, x, x, need_weights=False, key_padding_mask=padding_mask)[0]
 
-    def forward(self, x: torch.Tensor):
-        x = x + self.drop_path(self.attention(self.ln_1(x)))
+    def forward(self, x: torch.Tensor, padding_mask: torch.Tensor = None):
+        x = x + self.drop_path(self.attention(self.ln_1(x), padding_mask))
         x = x + self.drop_path(self.mlp(self.ln_2(x)))
         return x
 
@@ -89,8 +95,10 @@ class Transformer(nn.Module):
         
         self.resblocks = nn.Sequential(*[ResidualAttentionBlock(width, heads, attn_mask, dropout=dropout[i]) for i in range(layers)])
 
-    def forward(self, x: torch.Tensor):
-        return self.resblocks(x)
+    def forward(self, x: torch.Tensor, padding_mask: torch.Tensor = None):
+        for resblock in self.resblocks:
+            x = resblock(x, padding_mask)
+        return x
 
 
 class VisualTransformer(nn.Module):
@@ -190,6 +198,7 @@ class CLIP(nn.Module):
             emb_dropout=emb_dropout
         )
 
+        # I really think there should be a padding mask here, since the description text is much shorter than 77
         self.transformer = Transformer(
             width=transformer_width,
             layers=transformer_layers,
@@ -215,7 +224,12 @@ class CLIP(nn.Module):
         # pytorch uses additive attention mask; fill with -inf
         mask = torch.empty(self.context_length, self.context_length)
         mask.fill_(float("-inf"))
-        mask.triu_(1)  # zero out the lower diagonal, which is the part we are going to pay attention to
+        mask.triu_(1)  # zero out the lower triangle which is the part we are going to pay attention to
+        return mask
+
+    def build_padding_mask(self, text_tokens):
+        mask = torch.zeros_like(text_tokens, dtype=float)
+        mask.masked_fill_(text_tokens == 0, float("-inf"))
         return mask
 
     @property
@@ -226,14 +240,13 @@ class CLIP(nn.Module):
         return self.visual(image.type(self.dtype))
 
     def encode_text(self, text):
-        print(text.shape)
+        padding_mask = self.build_padding_mask(text)
         x = self.token_embedding(text).type(self.dtype)  # [batch_size, n_ctx, d_model]
-        print(x.shape)
         x = x + self.positional_embedding.type(self.dtype)
         if self.emb_dropout > 0:
             x = self.dropout(x)
         x = x.permute(1, 0, 2)  # NLD -> LND
-        x = self.transformer(x)
+        x = self.transformer(x, padding_mask)
         x = x.permute(1, 0, 2)  # LND -> NLD
         x = self.ln_final(x).type(self.dtype)
 
@@ -243,18 +256,17 @@ class CLIP(nn.Module):
 
         return x
 
-    def forward(self, image, text):
-        image_features = self.encode_image(image)
+    def forward(self, image, text, vision_fusion=None):
+        b,t,c,h,w = image.size()
+        image = image.view(-1,c,h,w)
+        image_features = self.encode_image(image).view(b, t, -1)
+        if vision_fusion:
+            image_features = vision_fusion(image_features)
+        else:
+            image_features = image_features.mean(dim=1, keepdim=False)
+        image_features = norm(image_features)
+
         text_features = self.encode_text(text)
+        text_features = norm(text_features)
 
-        # normalized features
-        image_features = image_features / image_features.norm(dim=-1, keepdim=True)
-        text_features = text_features / text_features.norm(dim=-1, keepdim=True)
-
-        # cosine similarity as logits
-        logit_scale = self.logit_scale.exp()
-        logits_per_image = logit_scale * image_features @ text_features.t()
-        logits_per_text = logit_scale * text_features @ image_features.t()
-
-        # shape = [global_batch_size, global_batch_size]
-        return logits_per_image, logits_per_text
+        return image_features, text_features
