@@ -72,7 +72,7 @@ class ResidualAttentionBlock(nn.Module):
     def attention(self, x: torch.Tensor, padding_mask: torch.Tensor = None):
         # self.attn_mask = self.attn_mask.to(dtype=x.dtype, device=x.device) if self.attn_mask is not None else None
         # return self.attn(x, x, x, need_weights=False, attn_mask=self.attn_mask)[0]
-        # TODO:
+        # TODO
         # Don't know why the author is using attn mask and not using padding mask
         # it is not a generative model, so I think dropping attn_mask (mask upper triangle) and adding padding mask is more reasonable
         padding_mask = padding_mask.to(dtype=x.dtype, device=x.device) if padding_mask is not None else None

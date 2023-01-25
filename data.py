@@ -70,4 +70,8 @@ def tokenize(_tokenizer: SimpleTokenizer, texts: Union[str, List[str]], context_
 
     return result
 
-
+if __name__ == "__main__":
+    classes, num_text_aug, text_dict = text_prompt(["pull ups", "pumping gas"])
+    print(classes.shape)
+    print(classes)
+    print(num_text_aug)
