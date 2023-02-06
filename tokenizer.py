@@ -139,3 +139,5 @@ if __name__ == "__main__":
     code = t.encode("a test sentence, having dancing action in it")
     print(code)
     print(t.decode(code))
+
+    print(t.decode([0]))

@@ -48,7 +48,7 @@ def get_video_frames(video_path, freq):
 
     cap = cv2.VideoCapture(video_path)
     frames_per_sec = cap.get(cv2.CAP_PROP_FPS)
-
+    logger.info(frames_per_sec)
     '''
         key_frames sampling with 'freq' frames sampled in between
         e.g.
@@ -107,6 +107,6 @@ def get_video_frames(video_path, freq):
     return frames_per_sec, f_num, images
 
 if __name__ == "__main__":
-    frames_per_sec, f_num, images = get_video_frames("/Users/zhounanli/proj-eve/iq__2uCxJK4dw1BC7ZeKFCY8b3dg1ngZ/video/iq__2uCxJK4dw1BC7ZeKFCY8b3dg1ngZ.00006.mp4", 0)
+    frames_per_sec, f_num, images = get_video_frames("/pool0/ml/elv-zhounan/action/kinetics/k400/train/KlAJyjasmY8_000172_000182.mp4", 0)
     print(images[0].shape)
     print(type(images[0]))

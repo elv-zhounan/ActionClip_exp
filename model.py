@@ -102,7 +102,9 @@ class Transformer(nn.Module):
 
 
 class VisualTransformer(nn.Module):
-    def __init__(self, input_resolution: int, patch_size: int, width: int, layers: int, heads: int, output_dim: int,dropout = None, joint=False, emb_dropout = 0., T=0):
+    def __init__(self, input_resolution: int, patch_size: int, width: int, layers: int, heads: int, output_dim: int, dropout = None, emb_dropout = 0.):
+        # dropout is a list, for building the transformer
+        # embed_dropout is for the dropout layer here for embeding right before the attention block
         super().__init__()
         self.input_resolution = input_resolution
         self.output_dim = output_dim
@@ -114,18 +116,13 @@ class VisualTransformer(nn.Module):
         self.dropout = nn.Dropout(emb_dropout)
         self.ln_pre = LayerNorm(width)
         self.emb_dropout = emb_dropout
-        self.joint = joint
-        if joint:
-            print('=====using joint space-time====')
-            self.time_embedding = nn.Parameter(scale * torch.randn(T, width))
-            self.T = T
         if emb_dropout > 0:
             print('emb_dropout:{}'.format(emb_dropout))
 
         ## Attention Blocks
         self.transformer = Transformer(width, layers, heads, dropout=dropout)
-
         self.ln_post = LayerNorm(width)
+        # TODO not sure why we need this proj here, because LN is with a proj already
         self.proj = nn.Parameter(scale * torch.randn(width, output_dim))
 
     def forward(self, x: torch.Tensor):
@@ -135,31 +132,16 @@ class VisualTransformer(nn.Module):
         # using a small trick to make [width, ] shape class embedding to be like [batch, 1, width]
         x = torch.cat([self.class_embedding.to(x.dtype) + torch.zeros(x.shape[0], 1, x.shape[-1], dtype=x.dtype, device=x.device), x], dim=1)  # shape = [*, grid ** 2 + 1, width]
         x = x + self.positional_embedding.to(x.dtype)
-        # [*, L, c]
-        if self.joint:
-            #  I don't think the "fusion before" stagety will work
-            # wants to add time_embedding, and also rearrange the dimensions: from [B*T, L, c] to [B, L*T, c]
-            B = x.shape[0] // self.T
-            cls_tokens = x[:B, 0, :].unsqueeze(1)
-            x = x[:,1:]
-            x = rearrange(x, '(b t) n m -> (b n) t m',b=B,t=self.T)
-            x = x + self.time_embedding.to(x.dtype)
-            x = rearrange(x, '(b n) t m -> b (n t) m',b=B,t=self.T)
-            x = torch.cat((cls_tokens, x), dim=1)
-
         if self.emb_dropout > 0:
             x = self.dropout(x)
         x = self.ln_pre(x)
-
+        # feed into the attention block
         x = x.permute(1, 0, 2)  # NLD -> LND, required by torch.nn.Multihead attention
         x = self.transformer(x)
         x = x.permute(1, 0, 2)  # LND -> NLD
         # only return the cls label
         x = self.ln_post(x[:, 0, :])
-
-        if self.proj is not None:
-            x = x @ self.proj
-
+        x = x @ self.proj
         return x
 
 class CLIP(nn.Module):
@@ -176,8 +158,7 @@ class CLIP(nn.Module):
                  transformer_width: int,
                  transformer_heads: int,
                  transformer_layers: int,
-                 joint=False,
-                 T=8, dropout = 0., emb_dropout = 0.
+                 dropout = 0., emb_dropout = 0.
                  ):
         super().__init__()
 
@@ -194,7 +175,8 @@ class CLIP(nn.Module):
             width=vision_width,
             layers=vision_layers,
             heads=vision_heads,
-            output_dim=embed_dim,joint=joint,dropout=dpr,
+            output_dim=embed_dim,
+            dropout=dpr,
             emb_dropout=emb_dropout
         )
 
@@ -256,7 +238,7 @@ class CLIP(nn.Module):
 
         return x
 
-    def forward(self, image, text, vision_fusion=None):
+    def forward(self, image, text, vision_fusion=None, ground_truth=None, loss_img=None, loss_txt=None):
         b,t,c,h,w = image.size()
         image = image.view(-1,c,h,w)
         image_features = self.encode_image(image).view(b, t, -1)
