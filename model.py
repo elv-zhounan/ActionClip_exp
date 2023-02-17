@@ -148,7 +148,7 @@ class CLIP(nn.Module):
     def __init__(self,
                  embed_dim: int,
                  # vision
-                 image_resolution: int,
+                 input_resolution: int,
                  vision_layers: Union[Tuple[int, int, int, int], int],
                  vision_width: int,
                  vision_patch_size: int,
@@ -170,7 +170,7 @@ class CLIP(nn.Module):
 
         vision_heads = vision_width // 64
         self.visual = VisualTransformer(
-            input_resolution=image_resolution,
+            input_resolution=input_resolution,
             patch_size=vision_patch_size,
             width=vision_width,
             layers=vision_layers,
@@ -233,7 +233,8 @@ class CLIP(nn.Module):
         x = self.ln_final(x).type(self.dtype)
 
         # x.shape = [batch_size, n_ctx, transformer.width]
-        # take features from the eot embedding (eot_token is the highest number in each sequence)
+        # TODO take features from the eot embedding (eot_token is the highest number in each sequence)
+        # I do not think it is a good approach
         x = x[torch.arange(x.shape[0]), text.argmax(dim=-1)] @ self.text_projection
 
         return x
