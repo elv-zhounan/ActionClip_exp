@@ -1,6 +1,6 @@
-# import os
-# os.environ["CUDA_DEVICE_ORDER"]="PCI_BUS_ID"
-# os.environ["CUDA_VISIBLE_DEVICES"]="0"
+import os
+os.environ["CUDA_DEVICE_ORDER"]="PCI_BUS_ID"
+os.environ["CUDA_VISIBLE_DEVICES"]="0"
 
 import warnings
 warnings.filterwarnings("ignore")
@@ -20,20 +20,7 @@ import time
 from tqdm import tqdm
 from train_test_split import get_frames
 
-FRAMES = 16
-
-def load():
-    cfg = yaml.safe_load(open("./cfg/ViT-B-16.yaml"))
-
-    net = CLIP(**cfg)
-    net.load_state_dict(torch.load(f"./exp/clip_ucf/ViT-B-16/ucf101/last_model_without_attnmask.pt")["state_dict"])
-    net.eval()
-
-    fusion = Fusion(77, 512) 
-    fusion.load_state_dict(torch.load("./weights/fusion-model-state-dict-16f.pt"))
-    fusion.eval()
-
-    return net, fusion
+FRAMES = 32
 
 def encode_image(model:CLIP, input:Union[List[torch.Tensor], torch.Tensor]):
     return model.encode_image(input)
@@ -82,17 +69,34 @@ def validate(epoch, val_loader, classes, device, model, num_text_aug, fusion_mod
 if __name__ == "__main__":
     with torch.no_grad():
         device = "cuda" if torch.cuda.is_available() else "cpu"
-        net, fusion = load()
+        
+        cfg = yaml.safe_load(open("/home/elv-zhounan/ActionClip_exp/cfg/model/ViT-B-16.yaml"))
+        ckpt = torch.load("/home/elv-zhounan/ActionClip_exp/weights/UCF01/vit-b-16-32f.pt")
+
+        net = CLIP(**cfg)
+        net.load_state_dict(ckpt["model_state_dict"])
+        net.eval()
         net = net.to(device)
 
-        classes_names = list(json.load(open("./cfg/ucf101_labels.json")).keys())
+        fusion_state_dict = {}
+        for k, v in ckpt["fusion_model_state_dict"].items():
+            fusion_state_dict[k[7:]] = v
+        fusion = Fusion(77, 512) 
+        fusion.load_state_dict(fusion_state_dict)
+        fusion.eval()
+        fusion = fusion.to(device)
+
+
+        classes_names = sorted(os.listdir("/pool0/ml/elv-zhounan/action/kinetics/k400/train"))[200:300]
+        # classes_names = list(json.load(open("/home/elv-zhounan/ActionClip_exp/cfg/exp/ucf101/ucf101_labels.json")).keys())
+        print(classes_names)
         classes_encodes, num_text_aug, text_dict = text_prompt(classes_names)
         text_features = net.encode_text(classes_encodes.to(device))
         print(text_features.shape)
-
         start = time.time()
 
-        video_path = "/pool0/ml/elv-zhounan/action/ucf101/UCF101/v_TaiChi_g10_c02.avi"
+        video_path = "/pool0/ml/elv-zhounan/action/kinetics/k400/train/riding a bike/h9Dp1Ets5I4_000034_000044.mp4"
+        # video_path = "/pool0/ml/elv-zhounan/action/ucf101/UCF101/v_Knitting_g15_c01.avi"
         frames = get_frames(video_path)
         get_frames_timestamp = time.time()
         print("# of frames: ", len(frames), f"  cost {get_frames_timestamp-start} sec")
@@ -105,18 +109,17 @@ if __name__ == "__main__":
         get_image_features_timestamp = time.time()
         print("encoded image features shape: ", image_features.shape, f"  cost {get_image_features_timestamp - get_frames_timestamp} sec")
 
-        image_features = torch.mean(image_features, dim=1, keepdim=False)
-        print("Using mean to aggregate the seq features, shape is: ", image_features.shape)
+        # image_features = torch.mean(image_features, dim=1, keepdim=False)
+        image_features = fusion(image_features)
         # compute similarity
         image_features = F.normalize(image_features, dim=1).cpu()
         text_features = F.normalize(text_features, dim=1).cpu()
         cos_sim = image_features @ text_features.T
         get_sim_mat_timestamp = time.time()
         print("similarity met shape is: ", cos_sim.shape, f"  cost {get_sim_mat_timestamp - get_image_features_timestamp} sec")
-
         sims, topK = torch.topk(cos_sim, k=5, dim=1)
         print("topK indices: ", topK)
         for c, s in zip(topK.flatten().tolist(), sims.flatten().tolist()):
-            print(s, classes_names[c % 101])
+            print(s, classes_names[c%len(classes_names)])
 
         print(f"cost {time.time() - start} sec in total")

@@ -75,7 +75,7 @@ def main():
     """------------------------------------------define dataset------------------------------------------"""
     # plan is save dataset to a pickle first, because it takes too long to build
     transform_train = transforms.Compose([
-            transforms.Resize((224, 224)),
+            transforms.Resize((config.data.input_size, config.data.input_size)),
             transforms.RandomHorizontalFlip(),
             transforms.RandomApply([transforms.ColorJitter(brightness=0.4, contrast=0.4, saturation=0.2, hue=0.1)], p=0.8),
             transforms.RandomGrayscale(p=0.2),
@@ -83,7 +83,7 @@ def main():
             transforms.Normalize([0.48145466, 0.4578275, 0.40821073], [0.26862954, 0.26130258, 0.27577711])
     ])
     transform_test = transforms.Compose([
-            transforms.Resize((224, 224)),
+            transforms.Resize((config.data.input_size, config.data.input_size)),
             transforms.ToTensor(),
             transforms.Normalize([0.48145466, 0.4578275, 0.40821073], [0.26862954, 0.26130258, 0.27577711])
     ])
