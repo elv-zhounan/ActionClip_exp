@@ -23,13 +23,16 @@ def tranform(frames: List[np.ndarray], input_sz):
         res.append(auger(frame))
     return torch.stack(res)[None]
 
-def text_prompt(classes_names, context_length=77):
+def text_prompt(classes_names, context_length=77, train=True):
     tokenizer = SimpleTokenizer()
-    text_aug = [f"a photo of action {{}}", f"a picture of action {{}}", f"Human action of {{}}", f"{{}}, an action",
-                f"{{}} this is an action", f"{{}}, a video of action", f"Playing action of {{}}", f"{{}}",
-                f"Playing a kind of action, {{}}", f"Doing a kind of action, {{}}", f"Look, the human is {{}}",
-                f"Can you recognize the action of {{}}?", f"Video classification of {{}}", f"A video of {{}}",
-                f"The man is {{}}", f"The woman is {{}}"]
+    if train:
+        text_aug = [f"a photo of action {{}}", f"a picture of action {{}}", f"Human action of {{}}", f"{{}}, an action",
+                    f"{{}} this is an action", f"{{}}, a video of action", f"Playing action of {{}}", f"{{}}",
+                    f"Playing a kind of action, {{}}", f"Doing a kind of action, {{}}", f"Look, the human is {{}}",
+                    f"Can you recognize the action of {{}}?", f"Video classification of {{}}", f"A video of {{}}",
+                    f"The man is {{}}", f"The woman is {{}}"]
+    else:
+        text_aug = [f"A video of {{}}"]
     text_dict = {}
     num_text_aug = len(text_aug)
 
