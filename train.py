@@ -61,7 +61,7 @@ def main():
     if config.network.pretrained.clip != "":
         assert os.path.exists(config.network.pretrained.clip), "CLIP pretrained weights does not exist"
         model.load_state_dict(torch.load(config.network.pretrained.clip))
-
+    convert_weights(model)
     # construct the params group
     vision_params = list(map(id, model.visual.parameters()))
     text_params = filter(lambda p: id(p) not in vision_params, model.parameters())
@@ -151,16 +151,16 @@ def main():
             # prepare
             text_id = np.random.randint(num_text_aug, size=len(list_id))
             texts = torch.stack([text_dict[j][i,:] for i,j in zip(list_id,text_id)])
-            ground_truth = torch.tensor(gen_label(list_id), dtype=images.dtype)
 
             # send to device
             images= images.to(device)
             texts = texts.to(device)
-            ground_truth = ground_truth.to(device)
 
             # forward
-            image_features, text_features = model(images, texts, fusion_model, ground_truth, loss_img, loss_txt)
-           
+            image_features, text_features = model(images, texts, fusion_model)
+            ground_truth = torch.tensor(gen_label(list_id), dtype=image_features.dtype)
+            ground_truth = ground_truth.to(device)
+
             # get logits in one batch
             logit_scale = model.module.logit_scale.exp()
             logits_per_image = logit_scale * image_features @ text_features.t()
@@ -173,7 +173,10 @@ def main():
 
             # update parmas
             total_loss.backward()
+            #TODO need convert back to do step, if not, the loss will be NaN, need to check  teh details
+            convert_models_to_fp32(model)
             optimizer.step()
+            convert_weights(model)
 
             # logging
             bar.set_postfix_str(f"Total loss: {round(float(total_loss), 3)}")
@@ -186,6 +189,8 @@ def main():
         prec1, prec5 = validate(epoch, test_loader, classes, device, model, num_text_aug, fusion_model=fusion_model)
         writer.add_scalar('test/acc1', prec1, epoch)
         writer.add_scalar('test/acc5', prec5, epoch)
+        # convert to fp32
+        convert_models_to_fp32(model)
         # saving the best checkpoint so far
         print('Saving:')
         ckpt = { "state_dict": model.module.state_dict()} 
@@ -195,6 +200,8 @@ def main():
         if prec1 > best_prec1:
             filename = "{}/best_model.pt".format(working_dir)
             torch.save(ckpt, filename)
+        # convert back to fp16
+        convert_weights(model)
         # savinn the latest
         filename = "{}/last_model.pt".format(working_dir)
         torch.save(ckpt, filename)

@@ -239,7 +239,7 @@ class CLIP(nn.Module):
 
         return x
 
-    def forward(self, image, text, vision_fusion=None, ground_truth=None, loss_img=None, loss_txt=None):
+    def forward(self, image, text, vision_fusion=None):
         b,t,c,h,w = image.size()
         image = image.view(-1,c,h,w)
         image_features = self.encode_image(image).view(b, t, -1)
