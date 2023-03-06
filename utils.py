@@ -6,6 +6,12 @@ import numpy as np
 from loguru import logger
 import random
 
+def convert_models_to_fp32(model):
+    for p in model.parameters():
+        p.data = p.data.float()
+        if p.grad is not None:
+            p.grad.data = p.grad.data.float()
+
 def convert_weights(model: nn.Module):
     """Convert applicable model parameters to fp16"""
 
