@@ -86,10 +86,12 @@ class Fusion(nn.Module):
 
 if __name__ == "__main__":
     # i'm really not sure why they set the context_length to be 77, but according to the weight's shape, it is 
+    # I assume this fusion model will work for both text and vision
+    # so for compatible with a text seq, the pos emb shape 0 is set to 77
     fusion = Fusion(77, 512) 
     pretrained_state_dict = torch.load("/Users/zhounanli/ActionClipWeights/fision-model-state-dict-16f.pt")
     model_state_dict = fusion.state_dict()
     for k in model_state_dict:
         if model_state_dict[k].shape != pretrained_state_dict[k].shape:
             print(k, model_state_dict[k].shape, pretrained_state_dict[k].shape)
-    fusion.load_state_dict(torch.load("/Users/zhounanli/ActionClipWeights/fision-model-state-dict-16f.pt"))
+    fusion.load_state_dict(torch.load("/Users/zhounanli/ActionClipWeights/fusion-model-state-dict-16f.pt"))
