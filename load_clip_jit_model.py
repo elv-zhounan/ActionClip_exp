@@ -8,7 +8,7 @@ from model import CLIP
 if __name__ == "__main__":
     # device = "cuda:0" if torch.cuda.is_available() else "cpu"
     device = "cpu"
-    with open("/home/elv-zhounan/ActionClip_exp/weights/ViT-B-16.pt", "rb") as f:
+    with open("/home/elv-zhounan/ActionClip_exp/weights/CLIP_pretrain/ViT-B-16.pt", "rb") as f:
         model = torch.jit.load(f, map_location=device).eval()
     
     # print(model)
@@ -44,8 +44,8 @@ if __name__ == "__main__":
     
 
     if save:
-        torch.save(clip_state_dict, "/home/elv-zhounan/ActionClip_exp/weights/vit-b-16-state-dict.pt")
+        torch.save(clip_state_dict, "/home/elv-zhounan/ActionClip_exp/weights/CLIP_pretrain/vit-b-16-state-dict.pt")
     
 
     # test again
-    a_clip.load_state_dict(torch.load("/home/elv-zhounan/ActionClip_exp/weights/vit-b-16-state-dict.pt"))
+    a_clip.load_state_dict(torch.load("/home/elv-zhounan/ActionClip_exp/weights/CLIP_pretrain/vit-b-16-state-dict.pt"))
