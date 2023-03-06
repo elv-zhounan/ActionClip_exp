@@ -76,30 +76,43 @@ class UCF101_DATASETS(data.Dataset):
         return len(self.video_list)
 
 class K400_DATASETS(data.Dataset):
-    def __init__(self, root, num_segments=16, transform=None, test_mode=False, freq=2):
+    def __init__(self, root, num_segments=16, transform=None, test_mode=False, freq=2, subset=None, info=None):
         assert transform is not None
         self.num_segments = num_segments
         self.transform = transform
         self.test_mode = test_mode
         self.freq = freq
-        print("loading video list")
         root = os.path.join(root, "train" if not test_mode else "test")
+        if subset:
+            self.class_names = sorted(subset)
+        else:
+            self.class_names = sorted(os.listdir(root))
+        print("loading video list")
         self.videos = []
         self.frame_cnt = []
         self.labels = []
-        self.class_names = sorted(os.listdir(root))
+
         bar = tqdm.tqdm(self.class_names)
         for i, c in enumerate(bar):
             c_root = os.path.join(root, c)
             c_videos = sorted(os.listdir(c_root))
             bar.set_postfix_str(f"{len(c_videos)} videos for cls {c}")
             for v in c_videos:
-                cnt = len(os.listdir(os.path.join(c_root, v)))
-                if  cnt > 0:
-                    self.videos.append(os.path.join(c_root, v))
-                    self.labels.append(i)
-                    self.frame_cnt.append(cnt)
+                v = os.path.join(c_root, v)
+                if info is not None:
+                    if v in info:
+                        cnt = info[v]
+                        self.videos.append(v)
+                        self.labels.append(i)
+                        self.frame_cnt.append(cnt)
+                else:
+                    cnt = len(os.listdir(v))
+                    if  cnt > 0:
+                        self.videos.append(v)
+                        self.labels.append(i)
+                        self.frame_cnt.append(cnt)
         
+
     def _get_indices(self, video_frame_num):
         
         if self.num_segments == 1:
@@ -109,17 +122,12 @@ class K400_DATASETS(data.Dataset):
             return np.arange(self.num_segments) % video_frame_num
 
         if self.test_mode:
-            # a test set
-            # I would like it to return the same set of frames
-            # so I would evenly choose num_segments across the whole range 
             distance = video_frame_num // self.num_segments
             return np.array([j * distance for j in range(self.num_segments)], dtype=int)
         else:
-            # training mode, similar idea to test mode
-            # but the start will not be the first frame, will be random, reasonable one
+            # random select a random start, and them choose the continuous num_segments frames 
             offset = random.randint(0, video_frame_num-self.num_segments)
-            distance = (video_frame_num - offset) // self.num_segments
-            return np.array([j * distance for j in range(self.num_segments)], dtype=int)
+            return np.array([offset+j for j in range(self.num_segments)], dtype=int)
 
     def _get_frames(self, video_path, indices):
         images = []
