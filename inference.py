@@ -1,9 +1,7 @@
-import os
-os.environ["CUDA_DEVICE_ORDER"]="PCI_BUS_ID"
-os.environ["CUDA_VISIBLE_DEVICES"]="0"
-
 import warnings
 warnings.filterwarnings("ignore")
+
+import os
 
 import json
 
@@ -15,7 +13,7 @@ from fusion_vision import Fusion
 from typing import List, Union
 from tokenizer import SimpleTokenizer
 from data import *
-from utils import get_video_frames, norm
+# from utils import get_video_frames, norm
 import time
 from tqdm import tqdm
 from train_test_split import get_frames
@@ -53,9 +51,9 @@ def validate(epoch, val_loader, classes, device, model, num_text_aug, fusion_mod
 
             num += b
             for i in range(b):
-                if class_id[i] == indices_1[i]:
+                if class_id[i] == indices_1[i%len(classes)]:
                     corr_1 += 1
-                if class_id[i] in indices_5[i]:
+                if class_id[i] in indices_5[i%len(classes)]:
                     corr_5 += 1
 
             bar.set_postfix_str(f" up to now in avg:  Top1: {round(float(corr_1) / num, 3)}, Top5: {round(float(corr_5) / num, 3)}")
@@ -68,29 +66,38 @@ def validate(epoch, val_loader, classes, device, model, num_text_aug, fusion_mod
 
 if __name__ == "__main__":
     with torch.no_grad():
-        device = "cuda" if torch.cuda.is_available() else "cpu"
+        device = "cuda:0" if torch.cuda.is_available() else "cpu"
         
         cfg = yaml.safe_load(open("/home/elv-zhounan/ActionClip_exp/cfg/model/ViT-B-16.yaml"))
-        ckpt = torch.load("/home/elv-zhounan/ActionClip_exp/weights/UCF01/vit-b-16-32f.pt")
+        # ckpt = torch.load("/home/elv-zhounan/ActionClip_exp/weights/UCF01/vit-b-16-32f.pt")
+        ckpt = torch.load("/home/elv-zhounan/ActionClip_exp/exp/ViT-B-16/K400/16_frames/best_model.pt")
 
-        net = CLIP(**cfg)
-        net.load_state_dict(ckpt["model_state_dict"])
-        net.eval()
-        net = net.to(device)
+        if "model_state_dict" in ckpt:
 
-        fusion_state_dict = {}
-        for k, v in ckpt["fusion_model_state_dict"].items():
-            fusion_state_dict[k[7:]] = v
-        fusion = Fusion(77, 512) 
-        fusion.load_state_dict(fusion_state_dict)
-        fusion.eval()
-        fusion = fusion.to(device)
+            net = CLIP(**cfg)
+            net.load_state_dict(ckpt["model_state_dict"])
+            net.eval()
+            net = net.to(device)
+
+            fusion_state_dict = {}
+            for k, v in ckpt["fusion_model_state_dict"].items():
+                fusion_state_dict[k[7:]] = v
+            fusion = Fusion(77, 512) 
+            fusion.load_state_dict(fusion_state_dict)
+            fusion.eval()
+            fusion = fusion.to(device)
+        else:
+            net = CLIP(**cfg)
+            net.load_state_dict(ckpt["state_dict"])
+            net.eval()
+            net = net.to(device)
+
+            fusion = None
 
 
-        classes_names = sorted(os.listdir("/pool0/ml/elv-zhounan/action/kinetics/k400/train"))[200:300]
-        # classes_names = list(json.load(open("/home/elv-zhounan/ActionClip_exp/cfg/exp/ucf101/ucf101_labels.json")).keys())
+        classes_names = sorted(os.listdir("/pool0/ml/elv-zhounan/action/kinetics/k400/train"))
         print(classes_names)
-        classes_encodes, num_text_aug, text_dict = text_prompt(classes_names)
+        classes_encodes, num_text_aug, text_dict = text_prompt(classes_names, train=False)
         text_features = net.encode_text(classes_encodes.to(device))
         print(text_features.shape)
         start = time.time()
@@ -109,8 +116,10 @@ if __name__ == "__main__":
         get_image_features_timestamp = time.time()
         print("encoded image features shape: ", image_features.shape, f"  cost {get_image_features_timestamp - get_frames_timestamp} sec")
 
-        # image_features = torch.mean(image_features, dim=1, keepdim=False)
-        image_features = fusion(image_features)
+        
+        if fusion is not None:
+            image_features = fusion(image_features)
+        image_features = torch.mean(image_features, dim=1, keepdim=False)
         # compute similarity
         image_features = F.normalize(image_features, dim=1).cpu()
         text_features = F.normalize(text_features, dim=1).cpu()
