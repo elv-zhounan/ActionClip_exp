@@ -1,6 +1,6 @@
 import os
 os.environ["CUDA_DEVICE_ORDER"]="PCI_BUS_ID"
-os.environ["CUDA_VISIBLE_DEVICES"]="3, 4"
+os.environ["CUDA_VISIBLE_DEVICES"]="0,2,3,4"
 
 import warnings
 warnings.filterwarnings("ignore")
@@ -38,7 +38,13 @@ def main():
     
     with open(args.config, 'r') as f:
         config = yaml.safe_load(f)
-    working_dir = os.path.join('./exp', config['network']['arch'], config['data']['dataset'], f"{config['data']['num_segments']}_frames")
+
+    if "subset" in config["data"]:
+        working_dir = os.path.join('./exp', config['network']['arch'], config['data']['dataset'], f"{config['data']['num_segments']}_frames_subset{config['data']['subset']}")
+        subset = list(json.load(open(f"./cfg/exp/k400/subset{config['data']['subset']}.json")).keys())
+    else:
+        working_dir = os.path.join('./exp', config['network']['arch'], config['data']['dataset'], f"{config['data']['num_segments']}_frames")
+        subset = None
     config = DotMap(config)
 
     Path(working_dir).mkdir(parents=True, exist_ok=True)
@@ -60,7 +66,6 @@ def main():
     vision_params = list(map(id, model.visual.parameters()))
     text_params = filter(lambda p: id(p) not in vision_params, model.parameters())
     param_group = [{'params': text_params}, {'params': model.visual.parameters(), 'lr': config.solver.lr * config.solver.ratio}]
-
     model = torch.nn.DataParallel(model).to(device)
 
     # TODO
@@ -89,22 +94,15 @@ def main():
     ])
 
     ds_cls = getattr(dataset, config.data.dataset+"_DATASETS")
+
     # train set, try load pick first
-    train_dataset_path = os.path.join(working_dir, "train_datasset.obj")
-    if os.path.exists(train_dataset_path):
-        print("Loading training set from pickle file")
-        train_dataset = pickle.load(open(train_dataset_path, "rb"))
-    else:
-        train_dataset = ds_cls(config.data.root, config.data.num_segments, transform_train, False, config.data.cut_freq)
-        pickle.dump(train_dataset, open(train_dataset_path, "wb"))
-    # test set, try load pick first
-    test_dataset_path = os.path.join(working_dir, "test_datasset.obj")
-    if os.path.exists(test_dataset_path):
-        print("Loading testing set from pickle file")
-        test_dataset = pickle.load(open(test_dataset_path, "rb"))
-    else:
-        test_dataset = ds_cls(config.data.root, config.data.num_segments, transform_test, True, config.data.cut_freq)
-        pickle.dump(test_dataset, open(test_dataset_path, "wb"))
+    train_info = json.load(open("./cfg/data_k400/train_info.json"))
+    train_dataset = ds_cls(config.data.root, config.data.num_segments, transform_train, False, config.data.cut_freq, subset=subset, info=train_info)
+    test_info = json.load(open("./cfg/data_k400/test_info.json"))
+    test_dataset = ds_cls(config.data.root, config.data.num_segments, transform_test, True, config.data.cut_freq, subset=subset, info=test_info)
+
+    print(f"train dataset length: {len(train_dataset)}, test dataset length: {len(test_dataset)}")
+
     # construct loader
     train_loader = DataLoader(train_dataset,batch_size=config.data.batch_size,num_workers=config.data.workers,shuffle=True,pin_memory=False,drop_last=True)
     test_loader = DataLoader(test_dataset,batch_size=config.data.batch_size,num_workers=config.data.workers,shuffle=False,pin_memory=False,drop_last=True)
@@ -138,7 +136,7 @@ def main():
     for epoch in range(config.solver.epochs):
         """train"""
         model.train()
-        if fusion_model:
+        if fusion_model is not None:
             fusion_model.train()
         bar = tqdm(train_loader)
         for batch_idx,(images, list_id) in enumerate(bar):
