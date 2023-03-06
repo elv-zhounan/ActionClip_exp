@@ -70,8 +70,8 @@ if __name__ == "__main__":
         
         cfg = yaml.safe_load(open("/home/elv-zhounan/ActionClip_exp/cfg/model/ViT-B-16.yaml"))
         # ckpt = torch.load("/home/elv-zhounan/ActionClip_exp/weights/UCF01/vit-b-16-32f.pt")
-        ckpt = torch.load("/home/elv-zhounan/ActionClip_exp/exp/ViT-B-16/K400/16_frames/best_model.pt")
-
+        # ckpt = torch.load("/home/elv-zhounan/ActionClip_exp/exp/ViT-B-16/K400/16_frames/best_model.pt")
+        ckpt = torch.load("/home/elv-zhounan/ActionClip_exp/weights/K400_pretrained/vit-b-16-32f.pt")
         if "model_state_dict" in ckpt:
 
             net = CLIP(**cfg)
@@ -103,7 +103,6 @@ if __name__ == "__main__":
         start = time.time()
 
         video_path = "/pool0/ml/elv-zhounan/action/kinetics/k400/train/riding a bike/h9Dp1Ets5I4_000034_000044.mp4"
-        # video_path = "/pool0/ml/elv-zhounan/action/ucf101/UCF101/v_Knitting_g15_c01.avi"
         frames = get_frames(video_path)
         get_frames_timestamp = time.time()
         print("# of frames: ", len(frames), f"  cost {get_frames_timestamp-start} sec")
@@ -119,7 +118,8 @@ if __name__ == "__main__":
         
         if fusion is not None:
             image_features = fusion(image_features)
-        image_features = torch.mean(image_features, dim=1, keepdim=False)
+        else:
+            image_features = torch.mean(image_features, dim=1, keepdim=False)
         # compute similarity
         image_features = F.normalize(image_features, dim=1).cpu()
         text_features = F.normalize(text_features, dim=1).cpu()
