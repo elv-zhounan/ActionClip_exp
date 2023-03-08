@@ -4,6 +4,7 @@ warnings.filterwarnings("ignore")
 import os
 
 import json
+from loguru import logger
 
 import torch
 import torch.nn.functional as F
@@ -17,8 +18,6 @@ from data import *
 import time
 from tqdm import tqdm
 from train_test_split import get_frames
-
-FRAMES = 32
 
 def encode_image(model:CLIP, input:Union[List[torch.Tensor], torch.Tensor]):
     return model.encode_image(input)
@@ -66,19 +65,23 @@ def validate(epoch, val_loader, classes, device, model, num_text_aug, fusion_mod
 
 if __name__ == "__main__":
     with torch.no_grad():
+        FRAMES = 32
         device = "cuda:0" if torch.cuda.is_available() else "cpu"
-        
+        inf_as_one = False
         cfg = yaml.safe_load(open("/home/elv-zhounan/ActionClip_exp/cfg/model/ViT-B-16.yaml"))
-        # ckpt = torch.load("/home/elv-zhounan/ActionClip_exp/weights/UCF01/vit-b-16-32f.pt")
         # ckpt = torch.load("/home/elv-zhounan/ActionClip_exp/exp/ViT-B-16/K400/16_frames/best_model.pt")
         ckpt = torch.load("/home/elv-zhounan/ActionClip_exp/weights/K400_pretrained/vit-b-16-32f.pt")
+        video_path = "/home/elv-zhounan/ActionClip_exp/test/test.mp4"
+        classes_names = sorted(os.listdir("/pool0/ml/elv-zhounan/action/kinetics/k400/train"))
+
         if "model_state_dict" in ckpt:
 
             net = CLIP(**cfg)
             net.load_state_dict(ckpt["model_state_dict"])
             net.eval()
+            logit_scale = net.logit_scale.exp()
             net = net.to(device)
-
+            logger.info(f"logit_scale: {logit_scale}")
             fusion_state_dict = {}
             for k, v in ckpt["fusion_model_state_dict"].items():
                 fusion_state_dict[k[7:]] = v
@@ -90,45 +93,65 @@ if __name__ == "__main__":
             net = CLIP(**cfg)
             net.load_state_dict(ckpt["state_dict"])
             net.eval()
+            logit_scale = net.logit_scale.exp()
+            logger.info(f"logit_scale: {logit_scale}")
             net = net.to(device)
 
             fusion = None
 
-
-        classes_names = sorted(os.listdir("/pool0/ml/elv-zhounan/action/kinetics/k400/train"))
-        print(classes_names)
         classes_encodes, num_text_aug, text_dict = text_prompt(classes_names, train=False)
         text_features = net.encode_text(classes_encodes.to(device))
         print(text_features.shape)
         start = time.time()
 
-        video_path = "/pool0/ml/elv-zhounan/action/kinetics/k400/train/riding a bike/h9Dp1Ets5I4_000034_000044.mp4"
+        
         frames = get_frames(video_path)
         get_frames_timestamp = time.time()
         print("# of frames: ", len(frames), f"  cost {get_frames_timestamp-start} sec")
         
-        interval = len(frames) // FRAMES
-        frames = frames[::interval][:FRAMES]
-        frames = tranform(frames, net.visual.input_resolution)
-        print("stack images input shape: ", frames.shape)
-        image_features = net.encode_image(frames.view(-1, 3, 224, 224).to(device)).view(1, FRAMES, -1)
-        get_image_features_timestamp = time.time()
-        print("encoded image features shape: ", image_features.shape, f"  cost {get_image_features_timestamp - get_frames_timestamp} sec")
+        if inf_as_one:
+            interval = len(frames) // FRAMES
+            frames = frames[::interval][:FRAMES]
+            frames = tranform(frames, net.visual.input_resolution)
+            print("stack images input shape: ", frames.shape)
+            image_features = net.encode_image(frames.view(-1, 3, 224, 224).to(device)).view(1, FRAMES, -1)
+            get_image_features_timestamp = time.time()
+            print("encoded image features shape: ", image_features.shape, f"  cost {get_image_features_timestamp - get_frames_timestamp} sec")
 
-        
-        if fusion is not None:
-            image_features = fusion(image_features)
+            
+            if fusion is not None:
+                image_features = fusion(image_features)
+            else:
+                image_features = torch.mean(image_features, dim=1, keepdim=False)
+            # compute similarity
+            image_features = F.normalize(image_features, dim=1).cpu()
+            text_features = F.normalize(text_features, dim=1).cpu()
+
+            logits = logit_scale * image_features @ text_features.T
+            pred = torch.softmax(logits, dim=1)
+            get_sim_mat_timestamp = time.time()
+            print("similarity met shape is: ", pred.shape, f"  cost {get_sim_mat_timestamp - get_image_features_timestamp} sec")
+            sims, topK = torch.topk(pred, k=5, dim=1)
+            print("topK indices: ", topK)
+            for c, s in zip(topK.flatten().tolist(), sims.flatten().tolist()):
+                print(s, classes_names[c%len(classes_names)])
+
+            print(f"cost {time.time() - start} sec in total")
         else:
-            image_features = torch.mean(image_features, dim=1, keepdim=False)
-        # compute similarity
-        image_features = F.normalize(image_features, dim=1).cpu()
-        text_features = F.normalize(text_features, dim=1).cpu()
-        cos_sim = image_features @ text_features.T
-        get_sim_mat_timestamp = time.time()
-        print("similarity met shape is: ", cos_sim.shape, f"  cost {get_sim_mat_timestamp - get_image_features_timestamp} sec")
-        sims, topK = torch.topk(cos_sim, k=5, dim=1)
-        print("topK indices: ", topK)
-        for c, s in zip(topK.flatten().tolist(), sims.flatten().tolist()):
-            print(s, classes_names[c%len(classes_names)])
-
-        print(f"cost {time.time() - start} sec in total")
+            while len(frames) > FRAMES:
+                clip_frames = frames[:FRAMES]
+                frames = frames[FRAMES:]
+                clip_frames = tranform(clip_frames, net.visual.input_resolution)
+                image_features = net.encode_image(clip_frames.view(-1, 3, 224, 224).to(device)).view(1, FRAMES, -1)
+                if fusion is not None:
+                    image_features = fusion(image_features)
+                else:
+                    image_features = torch.mean(image_features, dim=1, keepdim=False)
+                # compute similarity
+                image_features = F.normalize(image_features, dim=1).cpu()
+                text_features = F.normalize(text_features, dim=1).cpu()
+                logits = logit_scale * image_features @ text_features.T
+                pred = torch.softmax(logits, dim=1)
+                sims, topK = torch.topk(pred, k=1, dim=1)
+                for c, s in zip(topK.flatten().tolist(), sims.flatten().tolist()):
+                    print(s, classes_names[c%len(classes_names)])
