@@ -17,6 +17,8 @@ import json
 from torchvision import transforms
 import tqdm
 
+from loguru import logger
+
 class UCF101_DATASETS(data.Dataset):
     def __init__(self, root,
                  num_segments=16, 
@@ -30,9 +32,9 @@ class UCF101_DATASETS(data.Dataset):
         self.test_mode = test_mode
 
         root = os.path.join(root, "train" if not test_mode else "test")
-        print("loading video list")
+        logger.info("loading video list")
         self.video_list = [os.path.join(root, f) for f in os.listdir(root)]
-        print("counting video frames")
+        logger.info("counting video frames")
         self.frames_cnt = [len(os.listdir(f)) for f in tqdm.tqdm(self.video_list)]
         self.total_length = len(self.video_list)
         self.labels = json.load(open("./cfg/ucf101_labels.json"))
@@ -87,7 +89,7 @@ class K400_DATASETS(data.Dataset):
             self.class_names = sorted(subset)
         else:
             self.class_names = sorted(os.listdir(root))
-        print("loading video list")
+        logger.info("loading video list")
         self.videos = []
         self.frame_cnt = []
         self.labels = []
@@ -155,5 +157,5 @@ if __name__ == "__main__":
     ])
 
     dataset = K400_DATASETS("/pool0/ml/elv-zhounan/action/kinetics/k400/images", 16, t, False)
-    print(len(dataset))
+    logger.info(len(dataset))
     
