@@ -14,6 +14,7 @@ from fusion_vision import Fusion
 from typing import List, Union
 from tokenizer import SimpleTokenizer
 from data import *
+from utils import *
 # from utils import get_video_frames, norm
 import time
 from tqdm import tqdm
@@ -69,11 +70,13 @@ if __name__ == "__main__":
         device = "cuda:0" if torch.cuda.is_available() else "cpu"
         inf_as_one = False
         cfg = yaml.safe_load(open("/home/elv-zhounan/ActionClip_exp/cfg/model/ViT-B-16.yaml"))
-        # ckpt = torch.load("/home/elv-zhounan/ActionClip_exp/exp/ViT-B-16/K400/16_frames/best_model.pt")
+        # ckpt = torch.load("/home/elv-zhounan/ActionClip_exp/exp/ViT-B-16/K400/16_frames_fp16_training_using_clip/best_model.pt")
         ckpt = torch.load("/home/elv-zhounan/ActionClip_exp/weights/K400_pretrained/vit-b-16-32f.pt")
         video_path = "/home/elv-zhounan/ActionClip_exp/test/test.mp4"
-        classes_names = sorted(os.listdir("/pool0/ml/elv-zhounan/action/kinetics/k400/train"))
+        # classes_names = sorted(os.listdir("/pool0/ml/elv-zhounan/action/kinetics/k400/train"))
+        # json.dump(classes_names, open("classes_name.json", "w"))
 
+        classes_names = json.load(open("classes_name.json"))
         if "model_state_dict" in ckpt:
 
             net = CLIP(**cfg)
@@ -118,7 +121,6 @@ if __name__ == "__main__":
             get_image_features_timestamp = time.time()
             print("encoded image features shape: ", image_features.shape, f"  cost {get_image_features_timestamp - get_frames_timestamp} sec")
 
-            
             if fusion is not None:
                 image_features = fusion(image_features)
             else:
@@ -152,6 +154,7 @@ if __name__ == "__main__":
                 text_features = F.normalize(text_features, dim=1).cpu()
                 logits = logit_scale * image_features @ text_features.T
                 pred = torch.softmax(logits, dim=1)
-                sims, topK = torch.topk(pred, k=1, dim=1)
+                sims, topK = torch.topk(pred, k=3, dim=1)
                 for c, s in zip(topK.flatten().tolist(), sims.flatten().tolist()):
                     print(s, classes_names[c%len(classes_names)])
+                print() 
