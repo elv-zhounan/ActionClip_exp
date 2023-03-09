@@ -12,6 +12,8 @@ from torch import nn
 from einops import rearrange
 from utils import norm
 
+from fusion_vision import Fusion
+
 def drop_path(x, drop_prob: float = 0., training: bool = False):
     """Drop paths (Stochastic Depth) per sample (when applied in main path of residual blocks).
     This is the same as the DropConnect impl I created for EfficientNet, etc networks, however,
@@ -239,17 +241,10 @@ class CLIP(nn.Module):
 
         return x
 
-    def forward(self, image, text, vision_fusion=None):
+    def forward(self, image, text):
         b,t,c,h,w = image.size()
         image = image.view(-1,c,h,w)
         image_features = self.encode_image(image).view(b, t, -1)
-        if vision_fusion:
-            image_features = vision_fusion(image_features)
-        else:
-            image_features = image_features.mean(dim=1, keepdim=False)
-        image_features = norm(image_features)
-
         text_features = self.encode_text(text)
-        text_features = norm(text_features)
 
         return image_features, text_features
