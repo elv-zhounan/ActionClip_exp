@@ -287,7 +287,7 @@ def main():
 
 
         """test"""
-        prec1, prec5 = validate(epoch, test_loader, classes, device, model, num_text_aug, fusion_model=fusion_model)
+        prec1, prec5 = validate(epoch, test_loader, classes, num_text_aug, device, model, fusion_model=fusion_model)
         writer.add_scalar('test/acc1', prec1, epoch)
         writer.add_scalar('test/acc5', prec5, epoch)
         # convert to fp32
