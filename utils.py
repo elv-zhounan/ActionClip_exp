@@ -112,6 +112,73 @@ def get_video_frames(video_path, freq):
     logger.info("Total # of frames %s" % frame_num)
     return frames_per_sec, f_num, images
 
+@torch.no_grad()        
+def momentum_update(model, model_m, momentum):          
+    for param, param_m in zip(model.parameters(), model_m.parameters()):
+        param_m.data = param_m.data * momentum + param.data * (1. - momentum)
+            
+            
+@torch.no_grad()
+def dequeue_and_enqueue(image_queue, text_queue, ptr_queue, image_feat, text_feat, queue_size, ):
+    
+    batch_size = image_feat.shape[0]
+    ptr = int(ptr_queue)
+    assert queue_size % batch_size == 0  # for simplicity
+
+    # replace the keys at ptr (dequeue and enqueue)
+    image_queue[:, ptr:ptr + batch_size] = image_feat.T
+    text_queue[:, ptr:ptr + batch_size] = text_feat.T
+    ptr = (ptr + batch_size) % queue_size # move pointer
+
+    ptr_queue[0] = ptr  
+
+@torch.no_grad()
+def concat_all_gather(tensor):
+    """
+    Performs all_gather operation on the provided tensors.
+    *** Warning ***: torch.distributed.all_gather has no gradient.
+    """
+    tensors_gather = [torch.ones_like(tensor) for _ in range(torch.distributed.get_world_size())]
+    torch.distributed.all_gather(tensors_gather, tensor, async_op=False)
+
+    output = torch.cat(tensors_gather, dim=0)
+    return output      
+
+
+class GatherLayer(torch.autograd.Function):
+    """
+    Gather tensors from all workers with support for backward propagation:
+    This implementation does not cut the gradients as torch.distributed.all_gather does.
+    """
+
+    @staticmethod
+    def forward(ctx, x):
+        output = [torch.zeros_like(x) for _ in range(torch.distributed.get_world_size())]
+        torch.distributed.all_gather(output, x)
+        return tuple(output)
+
+    @staticmethod
+    def backward(ctx, *grads):
+        all_gradients = torch.stack(grads)
+        torch.distributed.all_reduce(all_gradients)
+        return all_gradients[torch.distributed.get_rank()]
+
+
+def all_gather_with_grad(tensors):
+    """
+    Performs all_gather operation on the provided tensors.
+    Graph remains connected for backward grad computation.
+    """
+    # Queue the gathered tensors
+    world_size = torch.distributed.get_world_size()
+    # There is no need for reduction in the single-proc case
+    if world_size == 1:
+        return tensors
+
+    tensor_all = GatherLayer.apply(tensors)
+
+    return torch.cat(tensor_all, dim=0)
+
 if __name__ == "__main__":
     frames_per_sec, f_num, images = get_video_frames("/pool0/ml/elv-zhounan/action/kinetics/k400/train/KlAJyjasmY8_000172_000182.mp4", 0)
     print(images[0].shape)
