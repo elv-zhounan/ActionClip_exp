@@ -248,16 +248,16 @@ def main():
                     teacher_image_features, teacher_text_features = teacher_model(images, texts)
                     teacher_image_features, teacher_text_features = norm_features(teacher_image_features, teacher_text_features, teacher_fusion)
 
-                    teacher_pred_per_image = torch.softmax(teacher_logit_scale * teacher_image_features @ teacher_text_features.t(), dim=1)
-                    teacher_pred_per_text = torch.softmax(teacher_logit_scale * teacher_text_features @ teacher_image_features.t(), dim=1)
+                    teacher_pred_per_image = torch.softmax(teacher_logit_scale * teacher_image_features @ teacher_text_features.t() / config.network.temperature, dim=1)
+                    teacher_pred_per_text = torch.softmax(teacher_logit_scale * teacher_text_features @ teacher_image_features.t() / config.network.temperature, dim=1)
 
                     soft_label_per_image = teacher_pred_per_image.to(dtype=image_features.dtype).detach()
                     soft_label_per_text = teacher_pred_per_text.to(dtype=image_features.dtype).detach()
 
 
                 # get soft label loss
-                log_prob_img = torch.log_softmax(logits_per_image, dim=1)
-                log_prob_text = torch.log_softmax(logits_per_text, dim=1)
+                log_prob_img = torch.log_softmax(logits_per_image / config.network.temperature, dim=1)
+                log_prob_text = torch.log_softmax(logits_per_text / config.network.temperature, dim=1)
                 soft_loss_imgs = soft_loss_img(log_prob_img, soft_label_per_image)
                 soft_loss_texts = soft_loss_text(log_prob_text, soft_label_per_text)
                 soft_loss = (soft_loss_imgs + soft_loss_texts) / 2
