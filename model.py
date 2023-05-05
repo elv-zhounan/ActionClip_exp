@@ -163,7 +163,7 @@ class CLIP(nn.Module):
                  dropout = 0., emb_dropout = 0.
                  ):
         super().__init__()
-
+        self.embed_dim = embed_dim
         self.context_length = context_length
         if dropout > 0.:
             dpr = [x.item() for x in torch.linspace(0, dropout, vision_layers)]  # stochastic depth decay rule
