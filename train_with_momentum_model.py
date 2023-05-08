@@ -173,6 +173,17 @@ def main():
             image_feat, text_feat = model(images, texts)
             image_feat, text_feat = norm_features(image_feat, text_feat, None)
 
+            ground_truth = torch.tensor(gen_label(list_id), dtype=image_feat.dtype)
+            ground_truth = ground_truth.to(device)
+
+            logit_scale = model.module.logit_scale.exp()
+            sim_i2t = logit_scale * image_feat @ text_feat.t()
+            sim_t2i = logit_scale * text_feat @ image_feat.t()
+
+            loss_i2t = F.kl_div(input=F.log_softmax(sim_i2t), target=F.softmax(ground_truth), log_target=False)
+            loss_t2i = F.kl_div(input=F.log_softmax(sim_t2i), target=F.softmax(ground_truth), log_target=False)
+            loss_gt = (1-config.solver.alpha) * (loss_i2t+loss_t2i)/2
+
             with torch.no_grad():
                 momentum_update(model.module, model_m.module. config.network.momentum)
 
@@ -181,29 +192,28 @@ def main():
                 image_feat_m_all = torch.cat([image_feat_m.t(), image_queue.clone().detach()],dim=1)   
                 text_feat_m_all = torch.cat([text_feat_m.t(),text_queue.clone().detach()],dim=1)
 
-                # TODO is it the correct way to deal with the logit_scale ?
-                logit_scale = model.module.logit_scale.exp()
-                sim_i2t_m = logit_scale * image_feat_m @ text_feat_m_all
-                sim_t2i_m = logit_scale * text_feat_m @ image_feat_m_all   
+                # TODO  I remove the logit scale here, not sure if it will cause any trouble
+                
+                sim_i2t_m = image_feat_m @ text_feat_m_all
+                sim_t2i_m = text_feat_m @ image_feat_m_all     
 
-                sim_targets = torch.zeros(sim_i2t_m.size()).to(device)
-                sim_targets.fill_diagonal_(1)   
-
-                sim_i2t_targets = config.solver.alpha * F.softmax(sim_i2t_m, dim=1) + (1 - config.solver.alpha) * sim_targets
-                sim_t2i_targets = config.solver.alpha * F.softmax(sim_t2i_m, dim=1) + (1 - config.solver.alpha) * sim_targets        
+                sim_i2t_target_m = F.softmax(sim_i2t_m, dim=1)
+                sim_t2i_target_m = F.softmax(sim_t2i_m, dim=1)    
 
             logit_scale = model.module.logit_scale.exp()
-            sim_i2t = logit_scale * image_feat @ text_feat_m_all
-            sim_t2i = logit_scale *  text_feat @ image_feat_m_all
+            sim_i2t_m = logit_scale * image_feat @ text_feat_m_all
+            sim_t2i_m = logit_scale *  text_feat @ image_feat_m_all
 
-            loss_i2t = F.kl_div(input=F.log_softmax(sim_i2t, dim=1), target=sim_i2t_targets, log_target=False)
-            loss_t2i = F.kl_div(input=F.log_softmax(sim_t2i, dim=1), target=sim_t2i_targets, log_target=False)
-            loss_itc = (loss_i2t+loss_t2i)/2
+            loss_i2t_m = F.kl_div(input=F.log_softmax(sim_i2t_m, dim=1), target=sim_i2t_target_m, log_target=False)
+            loss_t2i_m = F.kl_div(input=F.log_softmax(sim_t2i_m, dim=1), target=sim_t2i_target_m, log_target=False)
+            loss_m = (loss_i2t_m+loss_t2i_m)/2
 
             dequeue_and_enqueue(image_queue, text_queue, ptr_queue, image_feat_m, text_feat_m, config.solver.queue_size) 
 
+
+            loss_total = (1-config.solver.alpha) * loss_gt + config.solver.alpha * loss_m
             # back propagate
-            loss_itc.backward()
+            loss_total.backward()
 
             # update parmas
             convert_models_to_fp32(model)
@@ -211,8 +221,10 @@ def main():
             convert_weights(model)
 
             # logging
-            bar.set_postfix_str(f"Total loss: {round(float(loss_itc.data), 3)}")
-            writer.add_scalar('train/total_loss', loss_itc.data, _iter)
+            bar.set_postfix_str(f"Total loss: {round(float(loss_total.data), 3)}, gt_loss: {round(float(loss_gt.data), 3)},  momentum_loss: {round(float(loss_m.data), 3)}")
+            writer.add_scalar('train/total_loss', loss_total.data, _iter)
+            writer.add_scalar('train/gt_loss', loss_gt.data, _iter)
+            writer.add_scalar('train/momentum_loss', loss_m.data, _iter)
 
 
         """test"""
