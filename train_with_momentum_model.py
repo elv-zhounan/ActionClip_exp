@@ -50,10 +50,10 @@ def main():
         config = yaml.safe_load(f)
 
     if "subset" in config["data"]:
-        working_dir = os.path.join('./exp', config['network']['arch'], config['data']['dataset'], f"{config['data']['num_segments']}_frames_subset{config['data']['subset']}")
+        working_dir = os.path.join('./exp', config['network']['arch'], config['data']['dataset'], f"{config['data']['num_segments']}_frames_subset{config['data']['subset']}_momentum_queue")
         subset = list(json.load(open(f"./cfg/exp/k400/subset{config['data']['subset']}.json")).keys())
     else:
-        working_dir = os.path.join('./exp', config['network']['arch'], config['data']['dataset'], f"{config['data']['num_segments']}_frames")
+        working_dir = os.path.join('./exp', config['network']['arch'], config['data']['dataset'], f"{config['data']['num_segments']}_frames_momentum_queue")
         subset = None
 
     config = DotMap(config)
@@ -73,18 +73,19 @@ def main():
     model_m.eval()
 
     model.load_state_dict(torch.load(config.network.pretrained))
-    model.load_state_dict(torch.load(config.network.pretrained))
+    model_m.load_state_dict(torch.load(config.network.pretrained))
     logger.info("converting to fp16")
     convert_weights(model)
     convert_weights(model_m)
 
 
     # construct the params group
+    logger.info("constructing param groups")
     vision_params = list(map(id, model.visual.parameters()))
     text_params = filter(lambda p: id(p) not in vision_params, model.parameters())
     param_group = [{'params': text_params}, {'params': model.visual.parameters(), 'lr': config.solver.lr * config.solver.lr_ratio}]
     model = torch.nn.DataParallel(model).to(device)
-    model_m = torch.nn.DataParallel(model).to(device)
+    model_m = torch.nn.DataParallel(model_m).to(device)
     """------------------------------------------define model finish------------------------------------------"""
 
 
@@ -125,9 +126,12 @@ def main():
     """------------------------------------------define solver------------------------------------------"""
     optimizer = optim.AdamW(param_group, betas=(0.9, 0.98), eps=1e-8, weight_decay=config.solver.weight_decay)
 
-    image_queue = nn.functional.normalize(torch.randn(model.module.embed_dim, config.solver.queue_size), dim=0)
-    text_queue = nn.functional.normalize(torch.randn(model.module.embed_dim, config.solver.queue_size), dim=0)
+    image_queue = nn.functional.normalize(torch.randn(model.module.embed_dim, config.solver.queue_size), dim=0).half().to(device)
+    text_queue = nn.functional.normalize(torch.randn(model.module.embed_dim, config.solver.queue_size), dim=0).half().to(device)
     ptr_queue = torch.zeros(1, dtype=torch.long)
+
+    _loss_i2t = KLLoss()
+    _loss_t2i = KLLoss()
 
     #TODO need to check the details
     # lr_scheduler = WarmupCosineAnnealingLR(
@@ -180,39 +184,34 @@ def main():
             sim_i2t = logit_scale * image_feat @ text_feat.t()
             sim_t2i = logit_scale * text_feat @ image_feat.t()
 
-            loss_i2t = F.kl_div(input=F.log_softmax(sim_i2t), target=F.softmax(ground_truth), log_target=False)
-            loss_t2i = F.kl_div(input=F.log_softmax(sim_t2i), target=F.softmax(ground_truth), log_target=False)
-            loss_gt = (1-config.solver.alpha) * (loss_i2t+loss_t2i)/2
+            loss_i2t = _loss_i2t(sim_i2t, ground_truth)
+            loss_t2i = _loss_t2i(sim_t2i, ground_truth)
+            loss_gt = (loss_i2t+loss_t2i)/2
 
             with torch.no_grad():
-                momentum_update(model.module, model_m.module. config.network.momentum)
+                momentum_update(model.module, model_m.module, config.network.momentum)
 
                 image_feat_m, text_feat_m = model_m(images, texts)
                 image_feat_m, text_feat_m = norm_features(image_feat_m, text_feat_m, None)
                 image_feat_m_all = torch.cat([image_feat_m.t(), image_queue.clone().detach()],dim=1)   
                 text_feat_m_all = torch.cat([text_feat_m.t(),text_queue.clone().detach()],dim=1)
 
-                # TODO  I remove the logit scale here, not sure if it will cause any trouble
-                
-                sim_i2t_m = image_feat_m @ text_feat_m_all
-                sim_t2i_m = text_feat_m @ image_feat_m_all     
+                # I'm using the same logit_scale here for a larger size, not sure it will cause some trouble
+                sim_i2t_m_target = logit_scale * image_feat_m @ text_feat_m_all
+                sim_t2i_m_target = logit_scale *  text_feat_m @ image_feat_m_all     
 
-                sim_i2t_target_m = F.softmax(sim_i2t_m, dim=1)
-                sim_t2i_target_m = F.softmax(sim_t2i_m, dim=1)    
-
-            logit_scale = model.module.logit_scale.exp()
             sim_i2t_m = logit_scale * image_feat @ text_feat_m_all
             sim_t2i_m = logit_scale *  text_feat @ image_feat_m_all
 
-            loss_i2t_m = F.kl_div(input=F.log_softmax(sim_i2t_m, dim=1), target=sim_i2t_target_m, log_target=False)
-            loss_t2i_m = F.kl_div(input=F.log_softmax(sim_t2i_m, dim=1), target=sim_t2i_target_m, log_target=False)
-            loss_m = (loss_i2t_m+loss_t2i_m)/2
+            loss_i2t_m = _loss_i2t(sim_i2t_m, sim_i2t_m_target)
+            loss_t2i_m = _loss_t2i(sim_t2i_m, sim_t2i_m_target)
+            loss_m = config.solver.alpha * (loss_i2t_m+loss_t2i_m)/2
 
+            # operating queue
             dequeue_and_enqueue(image_queue, text_queue, ptr_queue, image_feat_m, text_feat_m, config.solver.queue_size) 
 
-
-            loss_total = (1-config.solver.alpha) * loss_gt + config.solver.alpha * loss_m
             # back propagate
+            loss_total = loss_gt + loss_m
             loss_total.backward()
 
             # update parmas
@@ -221,7 +220,7 @@ def main():
             convert_weights(model)
 
             # logging
-            bar.set_postfix_str(f"Total loss: {round(float(loss_total.data), 3)}, gt_loss: {round(float(loss_gt.data), 3)},  momentum_loss: {round(float(loss_m.data), 3)}")
+            bar.set_postfix_str(f"Total loss: {round(float(loss_total.data), 3)}, gt_loss: {round(float(loss_gt.data), 3)},  momentum_loss: {round(float(loss_m.data), 3)}, queue_len: {int(ptr_queue)}")
             writer.add_scalar('train/total_loss', loss_total.data, _iter)
             writer.add_scalar('train/gt_loss', loss_gt.data, _iter)
             writer.add_scalar('train/momentum_loss', loss_m.data, _iter)
