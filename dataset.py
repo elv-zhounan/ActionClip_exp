@@ -19,65 +19,7 @@ import tqdm
 
 from loguru import logger
 
-class UCF101_DATASETS(data.Dataset):
-    def __init__(self, root,
-                 num_segments=16, 
-                 new_length=1,
-                 transform=None,
-                 test_mode=False):
-
-        self.num_segments = num_segments
-        self.seg_length = new_length
-        self.transform = transform
-        self.test_mode = test_mode
-
-        root = os.path.join(root, "train" if not test_mode else "test")
-        logger.info("loading video list")
-        self.video_list = [os.path.join(root, f) for f in os.listdir(root)]
-        logger.info("counting video frames")
-        self.frames_cnt = [len(os.listdir(f)) for f in tqdm.tqdm(self.video_list)]
-        self.total_length = len(self.video_list)
-        self.labels = json.load(open("./cfg/ucf101_labels.json"))
-
-
-    # TODO
-    def _get_random_indices(self, record):
-        raise NotImplementedError()
-
-    # if using this, each video will always give out the same set of frames
-    # lets use this first, simlify the original version
-    # TOREAD
-    def _get_indices(self, video_frame_num):
-        
-        if self.num_segments == 1:
-            return np.array([video_frame_num //2], dtype=np.int)
-        
-        if video_frame_num <= self.num_segments:
-            return np.mod(np.arange(self.num_segments), video_frame_num)
-
-        offset = (video_frame_num / self.num_segments - self.seg_length) / 2.0
-        return np.array([i * video_frame_num / self.num_segments + offset + j
-                         for i in range(self.num_segments)
-                         for j in range(self.seg_length)], dtype=int)
-
-    def _get_frames(self, video_path, indices):
-        images = []
-        for i in indices:
-            images.append(self.transform(Image.open(os.path.join(video_path, f"{i}.jpg")).convert('RGB')))
-        return torch.stack(images)
-
-    def __getitem__(self, index):
-        video_path = self.video_list[index]
-        video_frame_num = self.frames_cnt[index]
-        segment_indices = self._get_indices(video_frame_num)
-        images = self._get_frames(video_path, segment_indices)
-        label = self.labels[video_path.split("/")[-1].split("_")[1]]
-        return images, label
-
-    def __len__(self):
-        return len(self.video_list)
-
-class K400_DATASETS(data.Dataset):
+class DATASETS(data.Dataset):
     def __init__(self, root, num_segments=16, transform=None, test_mode=False, freq=2, subset=None, info=None):
         assert transform is not None
         self.num_segments = num_segments
@@ -156,6 +98,5 @@ if __name__ == "__main__":
             transforms.Normalize([0.48145466, 0.4578275, 0.40821073], [0.26862954, 0.26130258, 0.27577711])
     ])
 
-    dataset = K400_DATASETS("/pool0/ml/elv-zhounan/action/kinetics/k400/images", 16, t, False)
+    dataset = DATASETS("/pool0/ml/elv-zhounan/action/kinetics/k400/images", 16, t, False)
     logger.info(len(dataset))
-    
