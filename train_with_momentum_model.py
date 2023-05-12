@@ -12,7 +12,7 @@ from torchvision import transforms
 import numpy as np
 import json
 
-import dataset
+from dataset import DATASETS
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 import argparse
@@ -107,14 +107,16 @@ def main():
             transforms.Normalize([0.48145466, 0.4578275, 0.40821073], [0.26862954, 0.26130258, 0.27577711])
     ])
 
-    ds_cls = getattr(dataset, config.data.dataset+"_DATASETS")
-
-    # train set, try load pick first
-    train_info = json.load(open("./cfg/data_k400/train_info.json"))
-    train_dataset = ds_cls(config.data.root, config.data.num_segments, transform_train, False, config.data.cut_freq, subset=subset, info=train_info)
-    test_info = json.load(open("./cfg/data_k400/test_info.json"))
-    test_dataset = ds_cls(config.data.root, config.data.num_segments, transform_test, True, config.data.cut_freq, subset=subset, info=test_info)
-
+    
+    if config.data.dataset_info != "":
+        train_info = json.load(open(os.path.join(config.data.dataset_info, "train_info.json")))
+        train_dataset = DATASETS(config.data.root, config.data.num_segments, transform_train, False, config.data.cut_freq, subset=subset, info=train_info)
+        test_info = json.load(open(os.path.join(config.data.dataset_info, "train_info.json")))
+        test_dataset = DATASETS(config.data.root, config.data.num_segments, transform_test, True, config.data.cut_freq, subset=subset, info=test_info)
+    else:
+        train_dataset = DATASETS(config.data.root, config.data.num_segments, transform_train, False, config.data.cut_freq, subset=subset, info=None)
+        test_dataset = DATASETS(config.data.root, config.data.num_segments, transform_test, True, config.data.cut_freq, subset=subset, info=None)
+    
     logger.info(f"train dataset length: {len(train_dataset)}, test dataset length: {len(test_dataset)}")
 
     # construct loader
@@ -188,6 +190,8 @@ def main():
             loss_t2i = _loss_t2i(sim_t2i, ground_truth)
             loss_gt = (loss_i2t+loss_t2i)/2
 
+
+            # geting the loss using the momentum queue 
             with torch.no_grad():
                 momentum_update(model.module, model_m.module, config.network.momentum)
 
@@ -203,8 +207,10 @@ def main():
             sim_i2t_m = logit_scale * image_feat @ text_feat_m_all
             sim_t2i_m = logit_scale *  text_feat @ image_feat_m_all
 
-            loss_i2t_m = _loss_i2t(sim_i2t_m, sim_i2t_m_target)
-            loss_t2i_m = _loss_t2i(sim_t2i_m, sim_t2i_m_target)
+            # reduction = sum
+            loss_i2t_m = -torch.sum(F.log_softmax(sim_i2t_m, dim=1)*F.softmax(sim_i2t_m_target, dim=1),dim=1).sum()
+            loss_t2i_m = -torch.sum(F.log_softmax(sim_t2i_m, dim=1)*F.softmax(sim_t2i_m_target, dim=1),dim=1).sum() 
+
             loss_m = config.solver.alpha * (loss_i2t_m+loss_t2i_m)/2
 
             # operating queue
@@ -220,7 +226,7 @@ def main():
             convert_weights(model)
 
             # logging
-            bar.set_postfix_str(f"Total loss: {round(float(loss_total.data), 3)}, gt_loss: {round(float(loss_gt.data), 3)},  momentum_loss: {round(float(loss_m.data), 3)}, queue_len: {int(ptr_queue)}")
+            bar.set_postfix_str(f"Total loss: {round(float(loss_total.data), 3)}, gt_loss: {round(float(loss_gt.data), 3)},  momentum_loss: {round(float(loss_m.data), 3)}, queue_ptr: {int(ptr_queue)}")
             writer.add_scalar('train/total_loss', loss_total.data, _iter)
             writer.add_scalar('train/gt_loss', loss_gt.data, _iter)
             writer.add_scalar('train/momentum_loss', loss_m.data, _iter)
