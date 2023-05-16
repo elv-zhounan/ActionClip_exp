@@ -16,7 +16,7 @@ from typing import List, Union
 from tokenizer import SimpleTokenizer
 from data import *
 from utils import *
-from dataset import K400_DATASETS
+from dataset import DATASETS
 # from utils import get_video_frames, norm
 import time
 from tqdm import tqdm
@@ -115,8 +115,8 @@ if __name__ == "__main__":
     net.eval()
     logit_scale = net.logit_scale.exp()
     logger.info(f"logit_scale: {logit_scale}")
-    net = torch.nn.DataParallel(net).to(device)
     if args.val:
+        net = torch.nn.DataParallel(net).to(device)
         subset = None if args.subset == "" else list(json.load(open(args.subset)).keys())
         if subset is None:
             classes, num_text_aug, text_dict = text_prompt(json.load(open(args.classes_name)))
@@ -129,11 +129,14 @@ if __name__ == "__main__":
             transforms.Normalize([0.48145466, 0.4578275, 0.40821073], [0.26862954, 0.26130258, 0.27577711])
         ])
         test_info = json.load(open("./cfg/data_k400/test_info.json"))
-        test_dataset = K400_DATASETS(args.data_root, FRAMES, transform_test, True, 2, subset=subset, info=test_info)
+        test_dataset = DATASETS(args.data_root, FRAMES, transform_test, True, 2, subset=subset, info=test_info)
         test_loader = torch.utils.data.DataLoader(test_dataset,batch_size=16,num_workers=16,shuffle=False,pin_memory=False,drop_last=True)
         prec1, prec5 = validate(0, test_loader, classes, num_text_aug, device, net, fusion_model=fusion)
     else:
+        net = net.to(device)
         classes_names = json.load(open(args.classes_name))
+        if isinstance(classes_names, dict):
+            classes_names = list(classes_names.keys())
         classes, num_text_aug, text_dict = text_prompt(classes_names, train=False)
         with torch.no_grad():
             text_features = net.encode_text(classes.to(device))

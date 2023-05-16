@@ -70,10 +70,12 @@ def main():
     logger.info("building model")
     model = CLIP(**yaml.safe_load(open(f"./cfg/model/{config.network.arch}.yaml")), dropout=config.network.dropout, emb_dropout=config.network.emb_dropout)
     model_m = CLIP(**yaml.safe_load(open(f"./cfg/model/{config.network.arch}.yaml")), dropout=0, emb_dropout=0)
+    
+    if config.network.pretrained != "":
+        model.load_state_dict(torch.load(config.network.pretrained))
+        model_m.load_state_dict(torch.load(config.network.pretrained))
     model_m.eval()
 
-    model.load_state_dict(torch.load(config.network.pretrained))
-    model_m.load_state_dict(torch.load(config.network.pretrained))
     logger.info("converting to fp16")
     convert_weights(model)
     convert_weights(model_m)
@@ -154,6 +156,9 @@ def main():
     _iter = 0
     logger.info("start training loop")
     writer = SummaryWriter(working_dir)
+
+    if config.solver.test_before_train:
+        prec1, prec5 = validate(0, test_loader, classes, num_text_aug, device, model, fusion_model=None)
     
     for epoch in range(config.solver.epochs):
         """train"""
@@ -208,8 +213,8 @@ def main():
             sim_t2i_m = logit_scale *  text_feat @ image_feat_m_all
 
             # reduction = sum
-            loss_i2t_m = -torch.sum(F.log_softmax(sim_i2t_m, dim=1)*F.softmax(sim_i2t_m_target, dim=1),dim=1).sum()
-            loss_t2i_m = -torch.sum(F.log_softmax(sim_t2i_m, dim=1)*F.softmax(sim_t2i_m_target, dim=1),dim=1).sum() 
+            loss_i2t_m = -torch.sum(F.log_softmax(sim_i2t_m, dim=1)*F.softmax(sim_i2t_m_target, dim=1),dim=1).mean()
+            loss_t2i_m = -torch.sum(F.log_softmax(sim_t2i_m, dim=1)*F.softmax(sim_t2i_m_target, dim=1),dim=1).mean() 
 
             loss_m = config.solver.alpha * (loss_i2t_m+loss_t2i_m)/2
 
