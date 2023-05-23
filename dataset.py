@@ -98,5 +98,11 @@ if __name__ == "__main__":
             transforms.Normalize([0.48145466, 0.4578275, 0.40821073], [0.26862954, 0.26130258, 0.27577711])
     ])
 
-    dataset = DATASETS("/pool0/ml/elv-zhounan/action/kinetics/k400/images", 16, t, False)
-    logger.info(len(dataset))
+    dataset = DATASETS("/pool0/ml/elv-zhounan/action/ucf101/images", 16, t, True, 1)
+
+    dataloader = torch.utils.data.DataLoader(dataset,batch_size=4,num_workers=1,shuffle=False,pin_memory=False,drop_last=True)
+
+    for images, labels in dataloader:
+        print(labels)
+        print(images.shape)
+        break

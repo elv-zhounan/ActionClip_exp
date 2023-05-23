@@ -119,7 +119,7 @@ def momentum_update(model, model_m, momentum):
             
             
 @torch.no_grad()
-def dequeue_and_enqueue(image_queue, text_queue, ptr_queue, image_feat, text_feat, queue_size, ):
+def dequeue_and_enqueue(image_queue, text_queue, ptr_queue, label_queue, image_feat, text_feat, labels, queue_size, ):
     
     batch_size = image_feat.shape[0]
     ptr = int(ptr_queue)
@@ -128,6 +128,7 @@ def dequeue_and_enqueue(image_queue, text_queue, ptr_queue, image_feat, text_fea
     # replace the keys at ptr (dequeue and enqueue)
     image_queue[:, ptr:ptr + batch_size] = image_feat.T
     text_queue[:, ptr:ptr + batch_size] = text_feat.T
+    label_queue[:, ptr:ptr + batch_size] = labels.T
     ptr = (ptr + batch_size) % queue_size # move pointer
 
     ptr_queue[0] = ptr  

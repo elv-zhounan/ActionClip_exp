@@ -80,6 +80,9 @@ def main():
     convert_weights(model)
     convert_weights(model_m)
 
+    # """ debug """
+    # model.text_projection.register_hook(lambda g: print(g))
+    # """ gubed """        
 
     # construct the params group
     logger.info("constructing param groups")
@@ -133,9 +136,8 @@ def main():
     image_queue = nn.functional.normalize(torch.randn(model.module.embed_dim, config.solver.queue_size), dim=0).half().to(device)
     text_queue = nn.functional.normalize(torch.randn(model.module.embed_dim, config.solver.queue_size), dim=0).half().to(device)
     ptr_queue = torch.zeros(1, dtype=torch.long)
+    label_queue = torch.full((1, config.solver.queue_size),-100)
 
-    _loss_i2t = KLLoss()
-    _loss_t2i = KLLoss()
 
     #TODO need to check the details
     # lr_scheduler = WarmupCosineAnnealingLR(
@@ -175,6 +177,7 @@ def main():
             # prepare
             text_id = np.random.randint(num_text_aug, size=len(list_id))
             texts = torch.stack([text_dict[j][i,:] for i,j in zip(list_id,text_id)])
+            labels = list_id.view(-1, 1)
 
             # send to device
             images = images.to(device)
@@ -183,20 +186,30 @@ def main():
             # forward
             image_feat, text_feat = model(images, texts)
             image_feat, text_feat = norm_features(image_feat, text_feat, None)
-
-            ground_truth = torch.tensor(gen_label(list_id), dtype=image_feat.dtype)
-            ground_truth = ground_truth.to(device)
-
             logit_scale = model.module.logit_scale.exp()
-            sim_i2t = logit_scale * image_feat @ text_feat.t()
-            sim_t2i = logit_scale * text_feat @ image_feat.t()
 
-            loss_i2t = _loss_i2t(sim_i2t, ground_truth)
-            loss_t2i = _loss_t2i(sim_t2i, ground_truth)
-            loss_gt = (loss_i2t+loss_t2i)/2
+            if config.solver.contrastive_on_queue:
+                labels_all = torch.cat([labels.t(), label_queue.clone().detach()],dim=1)
+                ground_truth = torch.eq(labels, labels_all).to(image_feat.dtype).to(device)
+                ground_truth = ground_truth / ground_truth.sum(1,keepdim=True)     
 
+            else:
+                # we can get the in-batch contrastive loss
+                ground_truth = torch.eq(labels, labels.t()).to(image_feat.dtype).to(device)
+                ground_truth = ground_truth / ground_truth.sum(1,keepdim=True)     
 
-            # geting the loss using the momentum queue 
+                sim_i2t = logit_scale * image_feat @ text_feat.t()
+                sim_t2i = logit_scale * text_feat @ image_feat.t()
+
+                if config.solver.manual_KLD:
+                    loss_i2t_gt = -torch.sum(F.log_softmax(sim_i2t, dim=1)*ground_truth,dim=1).mean()
+                    loss_t2i_gt = -torch.sum(F.log_softmax(sim_t2i, dim=1)*ground_truth,dim=1).mean()
+                else:
+                    loss_i2t_gt = F.kl_div(F.log_softmax(sim_i2t, dim=1), ground_truth, log_target=False, reduction="sum")
+                    loss_t2i_gt = F.kl_div(F.log_softmax(sim_t2i, dim=1), ground_truth, log_target=False, reduction="sum")
+                loss_gt = (loss_i2t_gt+loss_t2i_gt)/2
+
+            # momentum distillation
             with torch.no_grad():
                 momentum_update(model.module, model_m.module, config.network.momentum)
 
@@ -209,17 +222,32 @@ def main():
                 sim_i2t_m_target = logit_scale * image_feat_m @ text_feat_m_all
                 sim_t2i_m_target = logit_scale *  text_feat_m @ image_feat_m_all     
 
+            # getting loss
             sim_i2t_m = logit_scale * image_feat @ text_feat_m_all
             sim_t2i_m = logit_scale *  text_feat @ image_feat_m_all
 
-            # reduction = sum
-            loss_i2t_m = -torch.sum(F.log_softmax(sim_i2t_m, dim=1)*F.softmax(sim_i2t_m_target, dim=1),dim=1).mean()
-            loss_t2i_m = -torch.sum(F.log_softmax(sim_t2i_m, dim=1)*F.softmax(sim_t2i_m_target, dim=1),dim=1).mean() 
-
+            if config.solver.manual_KLD:
+                # reduction = mean, manually do KL Div loss
+                loss_i2t_m = -torch.sum(F.log_softmax(sim_i2t_m, dim=1)*F.softmax(sim_i2t_m_target, dim=1),dim=1).mean()
+                loss_t2i_m = -torch.sum(F.log_softmax(sim_t2i_m, dim=1)*F.softmax(sim_t2i_m_target, dim=1),dim=1).mean() 
+            else:
+                # calling  torch func to get KLDloss
+                loss_i2t_m = F.kl_div(F.log_softmax(sim_i2t_m, dim=1), F.softmax(sim_i2t_m_target, dim=1), log_target=False, reduction="sum")
+                loss_t2i_m = F.kl_div(F.log_softmax(sim_t2i_m, dim=1), F.softmax(sim_t2i_m_target, dim=1), log_target=False, reduction="sum")
             loss_m = config.solver.alpha * (loss_i2t_m+loss_t2i_m)/2
 
+            # we need the sim_.._m to get the contrastive loss accross the whole queue
+            if config.solver.contrastive_on_queue:
+                if config.solver.manual_KLD:
+                    loss_i2t_gt = -torch.sum(F.log_softmax(sim_i2t_m, dim=1)*ground_truth,dim=1).mean()
+                    loss_t2i_gt = -torch.sum(F.log_softmax(sim_t2i_m, dim=1)*ground_truth,dim=1).mean()
+                else:
+                    loss_i2t_gt = F.kl_div(F.log_softmax(sim_i2t_m, dim=1), ground_truth, log_target=False, reduction="sum")
+                    loss_t2i_gt = F.kl_div(F.log_softmax(sim_t2i_m, dim=1), ground_truth, log_target=False, reduction="sum")
+                loss_gt = (loss_i2t_gt+loss_t2i_gt)/2
+
             # operating queue
-            dequeue_and_enqueue(image_queue, text_queue, ptr_queue, image_feat_m, text_feat_m, config.solver.queue_size) 
+            dequeue_and_enqueue(image_queue, text_queue, ptr_queue, label_queue, image_feat_m, text_feat_m, labels, config.solver.queue_size) 
 
             # back propagate
             loss_total = loss_gt + loss_m
