@@ -200,7 +200,9 @@ class CLIP(nn.Module):
         self.emb_dropout = emb_dropout
         
         self.text_projection = nn.Parameter(torch.empty(transformer_width, embed_dim))
-        self.logit_scale = nn.Parameter(torch.ones([]) * np.log(1 / 0.07))
+
+        """for ddp"""
+        # self.logit_scale = nn.Parameter(torch.ones([]) * np.log(1 / 0.07))
 
         self.initialize_parameters()
         
